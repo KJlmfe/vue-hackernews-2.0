@@ -1,27 +1,16 @@
 // this is aliased in webpack config based on server/client build
-import { createAPI } from 'create-api'
+import * as web3 from './web3';
+import LRU from 'lru-cache';
 
-const logRequests = !!process.env.DEBUG_API
+const cache = LRU({
+  max: 600000,
+  maxAge: 1000 * 60 * 60 // 1 hour
+});
 
-const api = createAPI({
-  version: '/v0',
-  config: {
-    databaseURL: 'https://hacker-news.firebaseio.com'
-  }
-})
+const api = web3;
+const logRequests = true;//!!process.env.DEBUG_API
 
-// warm the front page cache every 15 min
-// make sure to do this only once across all requests
-if (api.onServer) {
-  warmCache()
-}
-
-function warmCache () {
-  fetchItems((api.cachedIds.top || []).slice(0, 30))
-  setTimeout(warmCache, 1000 * 60 * 15)
-}
-
-function fetch (child) {
+function fetch(child) {
   logRequests && console.log(`fetching ${child}...`)
   const cache = api.cachedItems
   if (cache && cache.has(child)) {
@@ -41,25 +30,32 @@ function fetch (child) {
   }
 }
 
-export function fetchIdsByType (type) {
-  return api.cachedIds && api.cachedIds[type]
-    ? Promise.resolve(api.cachedIds[type])
-    : fetch(`${type}stories`)
+export function fetchIdsByType(type) {
+  return api.fetchList(type);
 }
 
-export function fetchItem (id) {
-  return fetch(`item/${id}`)
+export function fetchItem(id) {
+  if (cache && cache.has(id)) {
+    logRequests && console.log(`cache hit for ${id}.`)
+    return Promise.resolve(cache.get(id))
+  } else {
+    return api.fetchItem(id).then((item) => {
+      cache && cache.set(id, item);
+      logRequests && console.log(`fetched ${id}.`)
+      return item;
+    });
+  }
 }
 
-export function fetchItems (ids) {
+export function fetchItems(ids) {
   return Promise.all(ids.map(id => fetchItem(id)))
 }
 
-export function fetchUser (id) {
+export function fetchUser(id) {
   return fetch(`user/${id}`)
 }
 
-export function watchList (type, cb) {
+export function watchList(type, cb) {
   let first = true
   const ref = api.child(`${type}stories`)
   const handler = snapshot => {
